@@ -1,7 +1,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { AnchorProvider, Program } from "@coral-xyz/anchor";
 import WhirlpoolIdl from '../contracts/whirlpool.json';
-import { getProgramAddress, whirlpoolTokenBalances, whirlpoolTokenBalancesBn } from "../utils";
+import { getProgramAddress, whirlpoolTokenBalancesBn } from "../utils";
 import { reportError } from "../utils/errorContext";
 
 const whirlpoolProgram = (connection: Connection) => {
@@ -14,97 +14,41 @@ const whirlpoolProgram = (connection: Connection) => {
     return program;
 };
 
-function getWhirlpoolTokenAmounts(whirlpool: any, position: any, tokenADecimals: number, tokenBDecimals: number) {
-    const positionLiquidityAmount = position.liquidity;
-    const currentSqrtPrice = whirlpool.sqrtPrice;
+const BATCH_SIZE = 10;
 
-    const lowerTickIndex = position.tickLowerIndex;
-    const upperTickIndex = position.tickUpperIndex;
-    const tokenAmounts = whirlpoolTokenBalances(positionLiquidityAmount, currentSqrtPrice, tokenADecimals, tokenBDecimals, lowerTickIndex, upperTickIndex)
-
-    return tokenAmounts;
+async function getMultipleAccountsBatched(connection: Connection, keys: PublicKey[]) {
+    const accounts = [];
+    for (let i = 0; i < keys.length; i = i + BATCH_SIZE) {
+        const batch = keys.slice(i, Math.min(i + BATCH_SIZE, keys.length));
+        accounts.push(...(await connection.getMultipleAccountsInfo(batch)));
+    }
+    return accounts;
 }
 
-async function attemptParseWhirlpoolPositions(connection: Connection, positionMints: string[], decimalMap: Map<string, number>) {
-    const program = whirlpoolProgram(connection) as any;
-    const tokenBalances: {[position: string]: {[mint: string]: number} | undefined } = {};
-    // Convert position mints to whirlpool PDAs
+// Fetches and decodes only the position PDAs for the given mints, then only the whirlpools those
+// positions reference. Never scan the whole Whirlpool program (getProgramAccounts) here: that is
+// ~160k accounts per request and lets any caller amplify RPC load.
+async function fetchPositionsAndWhirlpools(program: any, connection: Connection, positionMints: string[]) {
     const positionPdas = positionMints.map((mint) => {
-        tokenBalances[mint] = undefined;
         const seeds = [Buffer.from("position"), new PublicKey(mint).toBytes()];
         return getProgramAddress(seeds, program.programId);
     });
-    // Fetch raw PDA Data
-    const accounts = [];
-    for(let i = 0; i < positionPdas.length; i = i + 10) {
-        const batch = positionPdas.slice(i, Math.min(i + 10, positionPdas.length));
-        const accountBatch = await connection.getMultipleAccountsInfo(batch);
-        accounts.push(...accountBatch);
-    }
 
-    const whirlpoolPositions = accounts.filter((account) => account !== null && account.data !== undefined);
-    
-    // Parse PDAs using whirlpool IDL
-    const parsedPositions = whirlpoolPositions.map((account) => program.account.position.coder.accounts.decode('position', account?.data));
-    
-    // Fetch all Whirlpools
-    const whirlpools = await program.account.whirlpool.all();
+    const positionAccounts = await getMultipleAccountsBatched(connection, positionPdas);
+    const parsedPositions = positionAccounts
+        .filter((account) => account !== null && account.data !== undefined)
+        .map((account) => program.coder.accounts.decode('position', account!.data));
 
-    // For each position PDA
-    for (let i = 0; i < parsedPositions.length; i++) {
-        const parsedPosition = parsedPositions[i];
-        // Get Whirlpool for position
-        const whirlpool = whirlpools.find((wp: any) => wp.publicKey.toString() == parsedPosition.whirlpool.toString()).account;
-        const tokenAMint = whirlpool.tokenMintA.toString();
-        const decimalA = decimalMap.get(tokenAMint);
-        const tokenBMint = whirlpool.tokenMintB.toString();
-        const decimalB = decimalMap.get(tokenBMint);
-
-        // Get token amounts for position (Helper)
-        // TODO error handling for missing decimals
-        if (!decimalA || !decimalB) {
-            console.warn(`Missing decimals for token mints: ${tokenAMint} or ${tokenBMint}`);
-            continue;
+    const whirlpoolKeys = [...new Set(parsedPositions.map((pp: any) => pp.whirlpool.toString()))].map((key) => new PublicKey(key));
+    const whirlpoolAccounts = await getMultipleAccountsBatched(connection, whirlpoolKeys);
+    const whirlpools = new Map<string, any>();
+    whirlpoolAccounts.forEach((account, idx) => {
+        if (account !== null && account.data !== undefined) {
+            whirlpools.set(whirlpoolKeys[idx].toString(), program.coder.accounts.decode('whirlpool', account.data));
         }
-        // Get token amounts for position
-        const tokenAmounts = getWhirlpoolTokenAmounts(whirlpool, parsedPosition, decimalA, decimalB);
+    });
 
-        // Add to base token map
-        tokenBalances[parsedPosition.positionMint.toString()] = {
-            [tokenAMint]: tokenAmounts.depositA,
-            [tokenBMint]: tokenAmounts.depositB
-        };
-    }
-    // Return map
-    return tokenBalances;
-}
-
-export async function parseAndConvertWhirlpoolPositions(connection: Connection, balances: {[mint: string]: number}, decimalMap: Map<string, number>) {
-    try {
-        // Determine which mints are whirlpool positions by filtering fro amount == 1, then attempting to fetch their Whirlpool PDA
-        const potentialWhirlpoolPositions = Object.keys(balances).filter((mint) => balances[mint] == 1);
-        const wpBalances = await attemptParseWhirlpoolPositions(connection, potentialWhirlpoolPositions, decimalMap);
-        for (const mint of Object.keys(wpBalances)) {
-            const wpBalance = wpBalances[mint];
-            if (wpBalance !== undefined) {
-                // Is a whirlpool position, add to balances
-                const mintsInPosition = Object.keys(wpBalance);
-                for (const mintInPosition of mintsInPosition) {
-                    const amount = wpBalance[mintInPosition];
-                    if (amount !== undefined) {
-                        // Add to balances
-                        balances[mintInPosition] = (balances[mintInPosition] || 0) + amount;
-                    }
-                }
-                // Remove whirlpool position mint from balances
-                delete balances[mint];
-            }
-        }
-    } catch (error) {
-        console.error("Error parsing whirlpool positions:", error);
-        reportError("whirlpools", error);
-    }
-    return balances;
+    return { parsedPositions, whirlpools };
 }
 
 function getWhirlpoolTokenAmountsBn(whirlpool: any, position: any, tokenADecimals: number, tokenBDecimals: number) {
@@ -121,41 +65,18 @@ function getWhirlpoolTokenAmountsBn(whirlpool: any, position: any, tokenADecimal
 async function attemptParseWhirlpoolPositionsBn(connection: Connection, positionMints: string[], decimalMap: Map<string, number>) {
     const program = whirlpoolProgram(connection) as any;
     const tokenBalances: {[position: string]: {[mint: string]: bigint} | undefined } = {};
-    // Convert position mints to whirlpool PDAs
-    const positionPdas = positionMints.map((mint) => {
-        tokenBalances[mint] = undefined;
-        const seeds = [Buffer.from("position"), new PublicKey(mint).toBytes()];
-        return getProgramAddress(seeds, program.programId);
-    });
-
-    // Fetch raw PDA Data
-    const accounts = [];
-    for(let i = 0; i < positionPdas.length; i = i + 10) {
-        const batch = positionPdas.slice(i, Math.min(i + 10, positionPdas.length));
-        const accountBatch = await connection.getMultipleAccountsInfo(batch);
-        accounts.push(...accountBatch);
-    }
-
-    const whirlpoolPositions = accounts.filter((account) => account !== null && account.data !== undefined);
-    
-    // Parse PDAs using whirlpool IDL
-    const parsedPositions = whirlpoolPositions.map((account) => program.account.position.coder.accounts.decode('position', account?.data));
-    
-    // Fetch raw PDA Data
-    // Fetch all Whirlpools
-    const whirlpools = [];
-    const whirlpoolPublicKeys: PublicKey[] = [...new Set(parsedPositions.map((pp) => pp.whirlpool))];
-    for(let i = 0; i < whirlpoolPublicKeys.length; i = i + 10) {
-        const batch = whirlpoolPublicKeys.slice(i, Math.min(i + 10, whirlpoolPublicKeys.length));
-        const accountBatch = (await connection.getMultipleAccountsInfo(batch)).map((ai, idx) => { return { publicKey: batch[idx], data: ai } }).filter((acc) => acc.data !== null && acc.data.data !== undefined).map((acc) => { return { publicKey: acc.publicKey, whirlpool: program.account.position.coder.accounts.decode('whirlpool', acc?.data?.data) } });
-        whirlpools.push(...accountBatch);
-    }
+    positionMints.forEach((mint) => { tokenBalances[mint] = undefined; });
+    const { parsedPositions, whirlpools } = await fetchPositionsAndWhirlpools(program, connection, positionMints);
 
     // For each position PDA
     for (let i = 0; i < parsedPositions.length; i++) {
         const parsedPosition = parsedPositions[i];
         // Get Whirlpool for position
-        const whirlpool = whirlpools.find((wp: any) => wp.publicKey.toString() == parsedPosition.whirlpool.toString())?.whirlpool;
+        const whirlpool = whirlpools.get(parsedPosition.whirlpool.toString());
+        if (!whirlpool) {
+            console.warn(`Missing whirlpool account: ${parsedPosition.whirlpool.toString()}`);
+            continue;
+        }
         const tokenAMint = whirlpool.tokenMintA.toString();
         const decimalA = decimalMap.get(tokenAMint);
         const tokenBMint = whirlpool.tokenMintB.toString();
@@ -184,6 +105,9 @@ export async function parseAndConvertWhirlpoolPositionsBn(connection: Connection
     try {
         // Determine which mints are whirlpool positions by filtering fro amount == 1, then attempting to fetch their Whirlpool PDA
         const potentialWhirlpoolPositions = Object.keys(balances).filter((mint) => balances[mint] == BigInt(1));
+        if (potentialWhirlpoolPositions.length === 0) {
+            return balances;
+        }
         const wpBalances = await attemptParseWhirlpoolPositionsBn(connection, potentialWhirlpoolPositions, decimalMap);
         for (const mint of Object.keys(wpBalances)) {
             const wpBalance = wpBalances[mint];

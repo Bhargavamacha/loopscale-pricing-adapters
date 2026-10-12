@@ -11,7 +11,9 @@ module.exports = [
       parser: tseslint.parser,
     },
     rules: {
-      "@typescript-eslint/no-explicit-any": "off"
+      "@typescript-eslint/no-explicit-any": "off",
+      // handlers share one signature; unused params are marked with a leading underscore
+      "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }]
     }
   },
 ];
