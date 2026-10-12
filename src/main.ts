@@ -10,7 +10,6 @@ import {
   UNDERLYING_EXPONENT_MINT_DATA,
   deriveStakePoolExchangeRates,
   getRateXTokenBalances,
-  getUsdcBalanceOfFlp,
   parseAndConvertWhirlpoolPositions,
   UNDERLYING_RATEX_MINT_DATA,
   JITOSOL_MINT,
@@ -19,7 +18,6 @@ import {
   getRateXTokenBalancesBn,
   deriveStakePoolExchangeRatesBn,
   getMeteoraTokenBalancesBn,
-  getUsdcBalanceOfFlpBn,
   getXsolBalanceInJitoSol,
   getXsolBalanceInJitoSolBn,
   getRatioConvertedBalances,
@@ -52,7 +50,6 @@ const handler = {
     "hylo": getXsolBalanceInJitoSol,
     "sanctum": deriveStakePoolExchangeRates,
     "meteora": getMeteoraTokenBalances,
-    "flash": getUsdcBalanceOfFlp
 };
 
 app.post(
@@ -99,7 +96,6 @@ const handlerBn = {
     "hylo": getXsolBalanceInJitoSolBn,
     "sanctum": deriveStakePoolExchangeRatesBn,
     "meteora": getMeteoraTokenBalancesBn,
-    "flash": getUsdcBalanceOfFlpBn,
 };
 
 type BigIntStringMap = Record<string, string>;

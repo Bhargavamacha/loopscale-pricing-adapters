@@ -1,6 +1,7 @@
 import { Connection } from "@solana/web3.js";
 import { switchBaseDecimals, switchBaseDecimalsBn } from "../utils";
 import { reportError } from "../utils/errorContext";
+import { MARKETS_URL } from "../utils/markets";
 
 // Converts collateral without public pricing (tranche receipts, uncovered
 // Exponent PTs, deal tokens) into a DefiLlama-priceable underlying at the
@@ -9,11 +10,6 @@ import { reportError } from "../utils/errorContext";
 // resulting underlying stays with the consumer. A static 1:1 map (like the
 // exponent handler) would misprice these by 4-13%: e.g. srONyc trades at
 // ~0.89x ONYC and oneSOL at ~1.11x SOL.
-//
-// The tars.loopscale.com edge gates requests, so default to the direct Cloud
-// Run host.
-const MARKETS_URL =
-  process.env.LOOPSCALE_MARKETS_URL || "https://markets-109615290061.us-central1.run.app";
 
 const ONYC = "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5";
 const EUSX = "3ThdFZQKM6kRyVGLG48kaPg5TRMhYMKY1iCRa9xop1WC";

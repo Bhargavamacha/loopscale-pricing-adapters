@@ -1,102 +1,67 @@
 import { Connection } from "@solana/web3.js";
-import { switchBaseDecimals, switchBaseDecimalsBn } from "../utils";
 import { reportError } from "../utils/errorContext";
+import { MARKETS_URL } from "../utils/markets";
 
 const XSOL_MINT = "4sWNB8zGWHkh6UnmwiEtzNxL4XrN7uK9tosbESbJFfVs";
 export const JITOSOL_MINT = "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn";
+const RATIO_SCALE = 10n ** 18n;
 
-type PythFeedResponse = {
-    parsed: {
-        id: string,
-        price: {
-            price: string,
-            conf: string,
-            expo: number
-        },
-    }[],
+async function getXsolRate(): Promise<number> {
+    const response = await fetch(`${MARKETS_URL}/prices`);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch Loopscale prices: ${response.status} ${response.statusText}`);
+    }
+    const prices: Record<string, { spotPrice?: number }> = await response.json();
+    const xsolPrice = prices[XSOL_MINT]?.spotPrice;
+    const jitoSolPrice = prices[JITOSOL_MINT]?.spotPrice;
+    if (typeof xsolPrice !== "number" || !Number.isFinite(xsolPrice) || xsolPrice <= 0 ||
+        typeof jitoSolPrice !== "number" || !Number.isFinite(jitoSolPrice) || jitoSolPrice <= 0) {
+        throw new Error("Missing or invalid xSOL/JitoSOL prices");
+    }
+    return xsolPrice / jitoSolPrice;
 }
 
-export async function getXsolBalanceInJitoSol(connection: Connection, balances: {[mint: string]: number}, decimalMap: Map<string, number>) {
+function getDecimals(decimalMap: Map<string, number>): [number, number] {
+    const xsol = decimalMap.get(XSOL_MINT);
+    const jitosol = decimalMap.get(JITOSOL_MINT);
+    if (xsol == null || jitosol == null || !Number.isInteger(xsol) || !Number.isInteger(jitosol) || xsol < 0 || jitosol < 0) {
+        throw new Error("Missing or invalid xSOL/JitoSOL decimals");
+    }
+    return [xsol, jitosol];
+}
 
+export async function getXsolBalanceInJitoSol(_connection: Connection, balances: {[mint: string]: number}, decimalMap: Map<string, number>) {
+    const mint = XSOL_MINT;
+    const balance = balances[mint];
+    if (balance === undefined || balance === 0) return balances;
     try {
-        const pythRequestXsol = "https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D=0x332e31d3fc656ca11dc8522f55791aa8dcd9dbeee0508ab880effc12a12b5c59";
-
-        const response = await fetch(pythRequestXsol);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch pyth data: ${response.status} ${response.statusText}`);
-        }
-    
-        const pythResponse: PythFeedResponse = await response.json();
-        const pythPriceData = pythResponse.parsed[0]?.price;
-        if (!pythPriceData) {
-            throw new Error(`No price found for XSol`);
-        }
-
-        const xsolPriceInJitoSol = parseInt(pythPriceData.price) * Math.pow(10, pythPriceData.expo);
-        
-        const xsolDecimals = decimalMap.get(XSOL_MINT);
-        const jitoSolDecimals = decimalMap.get(JITOSOL_MINT);
-        if (xsolDecimals === undefined || jitoSolDecimals === undefined) {
-            throw new Error(`No decimals found for XSol`);
-        }
-
-        const jitoSolAmountXSolDecimals = xsolPriceInJitoSol * balances[XSOL_MINT];
-        const jitoSolAmount = switchBaseDecimals(jitoSolAmountXSolDecimals, xsolDecimals, jitoSolDecimals);
-
-        balances[JITOSOL_MINT] = (balances[JITOSOL_MINT] || 0) + jitoSolAmount;
-        delete balances[XSOL_MINT]; 
+        const [xsolDecimals, jitoSolDecimals] = getDecimals(decimalMap);
+        const rate = await getXsolRate();
+        const amount = balance * rate * 10 ** (jitoSolDecimals - xsolDecimals);
+        if (!Number.isFinite(amount)) throw new Error("Invalid xSOL conversion amount");
+        balances[JITOSOL_MINT] = (balances[JITOSOL_MINT] || 0) + amount;
+        delete balances[mint];
     } catch (error) {
         console.error("Error in xsol balance fetch:", error);
-        // Gracefully fail and return the original balances
     }
-
     return balances;
 }
 
-export async function getXsolBalanceInJitoSolBn(connection: Connection, balances: {[mint: string]: bigint}, decimalMap: Map<string, number>) {
-
+export async function getXsolBalanceInJitoSolBn(_connection: Connection, balances: {[mint: string]: bigint}, decimalMap: Map<string, number>) {
+    const mint = XSOL_MINT;
+    const balance = balances[mint];
+    if (balance === undefined || balance === 0n) return balances;
     try {
-        const balance = balances[XSOL_MINT];
-        if (balance === undefined || balance === 0n) return balances;
-
-        const pythRequestXsol = "https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D=0x332e31d3fc656ca11dc8522f55791aa8dcd9dbeee0508ab880effc12a12b5c59";
-
-        const response = await fetch(pythRequestXsol);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch pyth data: ${response.status} ${response.statusText}`);
-        }
-
-        const pythResponse: PythFeedResponse = await response.json();
-        const pythPriceData = pythResponse.parsed[0]?.price;
-        if (!pythPriceData) {
-            throw new Error(`No price found for XSol`);
-        }
-
-        const xsolDecimals = decimalMap.get(XSOL_MINT);
-        const jitoSolDecimals = decimalMap.get(JITOSOL_MINT);
-        if (xsolDecimals === undefined || jitoSolDecimals === undefined) {
-            throw new Error(`No decimals found for XSol`);
-        }
-
-        // Pyth price = mantissa * 10^expo, expo is typically negative for USD/asset pairs.
-        // jitosol_native = xsol_native * mantissa * 10^expo (in xsol-decimals units)
-        const mantissa = BigInt(pythPriceData.price);
-        const expo = pythPriceData.expo;
-        let jitoSolAmountXSolDecimals: bigint;
-        if (expo >= 0) {
-            jitoSolAmountXSolDecimals = balance * mantissa * (10n ** BigInt(expo));
-        } else {
-            jitoSolAmountXSolDecimals = (balance * mantissa) / (10n ** BigInt(-expo));
-        }
-
-        const jitoSolAmount = switchBaseDecimalsBn(jitoSolAmountXSolDecimals, xsolDecimals, jitoSolDecimals);
-
-        balances[JITOSOL_MINT] = (balances[JITOSOL_MINT] || 0n) + jitoSolAmount;
-        delete balances[XSOL_MINT];
+        const [xsolDecimals, jitoSolDecimals] = getDecimals(decimalMap);
+        const rate = await getXsolRate();
+        const scaledRate = BigInt(Math.round(rate * Number(RATIO_SCALE)));
+        const amount = balance * scaledRate * (10n ** BigInt(jitoSolDecimals))
+            / (RATIO_SCALE * (10n ** BigInt(xsolDecimals)));
+        balances[JITOSOL_MINT] = (balances[JITOSOL_MINT] || 0n) + amount;
+        delete balances[mint];
     } catch (error) {
         console.error("Error in xsol balance fetch:", error);
         reportError("hylo", error);
     }
-
     return balances;
 }

@@ -1,16 +1,12 @@
 import { Connection } from "@solana/web3.js";
 import { reportError } from "../utils/errorContext";
+import { MARKETS_URL } from "../utils/markets";
 
 // DAWN private-credit deals post a supply-1, 0-decimal NFT as loan collateral.
 // Each NFT's value is simply its deal's outstanding principal, which the
 // markets service publishes on the public /deals route (`principalBaseUnits`,
 // in USDC base units) — no oracle needed. Matching by nftMint against the
 // request balances also means new deals are picked up automatically.
-//
-// The tars.loopscale.com edge gates requests, so default to the direct Cloud
-// Run host.
-const MARKETS_URL =
-  process.env.LOOPSCALE_MARKETS_URL || "https://markets-109615290061.us-central1.run.app";
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
