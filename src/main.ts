@@ -5,12 +5,7 @@ import { getDecimalMap } from './utils';
 import { errorContext } from './utils/errorContext';
 import { Connection, PublicKey } from '@solana/web3.js';
 import {
-  getMeteoraTokenBalances,
-  getExponentTokenBalances,
   UNDERLYING_EXPONENT_MINT_DATA,
-  deriveStakePoolExchangeRates,
-  getRateXTokenBalances,
-  parseAndConvertWhirlpoolPositions,
   UNDERLYING_RATEX_MINT_DATA,
   JITOSOL_MINT,
   parseAndConvertWhirlpoolPositionsBn,
@@ -18,12 +13,9 @@ import {
   getRateXTokenBalancesBn,
   deriveStakePoolExchangeRatesBn,
   getMeteoraTokenBalancesBn,
-  getXsolBalanceInJitoSol,
   getXsolBalanceInJitoSolBn,
-  getRatioConvertedBalances,
   getRatioConvertedBalancesBn,
   RATIO_UNDERLYING_MINTS,
-  getDawnDealBalances,
   getDawnDealBalancesBn
 } from './pricing';
 
@@ -39,52 +31,6 @@ app.use(express.json());
 app.get('/', async (_req: Request, res: Response) => {
   return res.send('ack');
 });
-
-const handler = {
-    "whirlpools": parseAndConvertWhirlpoolPositions,
-    // before hylo so PT-xSOL converted here joins direct xSOL in the JitoSOL conversion
-    "ratio": getRatioConvertedBalances,
-    "dawn": getDawnDealBalances,
-    "exponent": getExponentTokenBalances,
-    "ratex": getRateXTokenBalances,
-    "hylo": getXsolBalanceInJitoSol,
-    "sanctum": deriveStakePoolExchangeRates,
-    "meteora": getMeteoraTokenBalances,
-};
-
-app.post(
-  "/decompile_mints",
-  async (req: Request, res: Response) => {
-    try {
-      let balances = req.body.rawBalances;
-
-      const mints = Object.keys(balances).map((mint) => new PublicKey(mint));
-      mints.push(...Object.values(UNDERLYING_EXPONENT_MINT_DATA).map((mint) => new PublicKey(mint)));
-      mints.push(...Object.values(UNDERLYING_RATEX_MINT_DATA).map((mint) => new PublicKey(mint)));
-      mints.push(...[new PublicKey(JITOSOL_MINT)]) // Adding in case not present for Hylo XSol
-      mints.push(...RATIO_UNDERLYING_MINTS.map((mint) => new PublicKey(mint)));
-
-      const url = process.env.SOLANA_RPC_URL;
-      if (!url) {
-        return res.status(500).json({ error: "SOLANA_RPC_URL environment variable is not set." });
-      }
-      const connection = new Connection(url, "confirmed");
-
-      const decimalMap = await getDecimalMap(connection, mints);
-
-      const handlers = Object.keys(handler) as (keyof typeof handler)[];
-
-      for (const handlerName of handlers) {
-        balances = await handler[handlerName](connection, balances, decimalMap);
-      }
-
-      res.json(balances);
-    } catch (error) {
-      console.error("Error processing request:", error);
-      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
-    }
-  },
-);
 
 const handlerBn = {
     "whirlpools": parseAndConvertWhirlpoolPositionsBn,

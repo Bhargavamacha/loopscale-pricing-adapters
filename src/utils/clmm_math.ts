@@ -172,27 +172,6 @@ function tickIndexToPrice(tickIndex: number, decimalsA: number, decimalsB: numbe
     );
 }
 
-export function whirlpoolTokenBalances(
-    liquidity: BN,
-    sqrtPrice: BN,
-    tokenADecimals: number,
-    tokenBDecimals: number,
-    lowerTickIndex: number,
-    upperTickIndex: number
-) {
-    // Verify valid pool (using PDA seeds)
-    const price = sqrtPriceX64ToPrice(sqrtPrice, tokenADecimals, tokenBDecimals).toNumber();
-    const lower_sqrt_price = Math.sqrt(tickIndexToPrice(lowerTickIndex, tokenADecimals, tokenBDecimals).toNumber());
-    const upper_sqrt_price = Math.sqrt(tickIndexToPrice(upperTickIndex, tokenADecimals, tokenBDecimals).toNumber());
-    const clamped_current_sqrt_price = Math.min(Math.max(lower_sqrt_price, Math.sqrt(price)), upper_sqrt_price);
-
-    const sqrtDecimalGap = (tokenADecimals - tokenBDecimals) / 2;
-    const depositA = liquidity.toNumber() * (1/clamped_current_sqrt_price - 1/upper_sqrt_price) / (10 ** (-1 * sqrtDecimalGap));
-    const depositB = liquidity.toNumber() * (clamped_current_sqrt_price - lower_sqrt_price) / (10 ** (sqrtDecimalGap));
-
-    return {depositA, depositB};
-}
-
 export function whirlpoolTokenBalancesBn(
     liquidity: BN,
     sqrtPrice: BN,
@@ -208,8 +187,10 @@ export function whirlpoolTokenBalancesBn(
     const clamped_current_sqrt_price = Math.min(Math.max(lower_sqrt_price, Math.sqrt(price)), upper_sqrt_price);
 
     const sqrtDecimalGap = (tokenADecimals - tokenBDecimals) / 2;
-    const depositA = BigInt((liquidity.toNumber() * ((1 / clamped_current_sqrt_price - 1 / upper_sqrt_price) / (10 ** (-1 * sqrtDecimalGap)))).toFixed(0));
-    const depositB = BigInt((liquidity.toNumber() * (clamped_current_sqrt_price - lower_sqrt_price) / (10 ** sqrtDecimalGap)).toFixed(0));
+    // liquidity is a u128; BN.toNumber() throws above 2^53, so convert via string (float math below is already approximate)
+    const liquidityNumber = Number(liquidity.toString());
+    const depositA = BigInt((liquidityNumber * ((1 / clamped_current_sqrt_price - 1 / upper_sqrt_price) / (10 ** (-1 * sqrtDecimalGap)))).toFixed(0));
+    const depositB = BigInt((liquidityNumber * (clamped_current_sqrt_price - lower_sqrt_price) / (10 ** sqrtDecimalGap)).toFixed(0));
 
     return {depositA, depositB};
 }
