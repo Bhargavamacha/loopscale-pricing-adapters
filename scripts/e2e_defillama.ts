@@ -113,8 +113,18 @@ async function main() {
     failed = true;
   }
 
+  let base: RunResult | undefined;
   if (baseline !== 'none') {
-    const base = await runAdapter(tvl, baseline);
+    // The baseline is only a reference: if the deployed service is down, report it
+    // but judge the candidate on its own result.
+    try {
+      base = await runAdapter(tvl, baseline);
+    } catch (err) {
+      console.warn(`WARN: baseline ${baseline} failed, skipping comparison: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (base) {
     console.log(`baseline  ${baseline}: HTTP ${base.status} in ${base.ms} ms, ${base.requestMints} mints in, ${Object.keys(base.balances).length} out`);
 
     const mints = [...new Set([...Object.keys(cand.balances), ...Object.keys(base.balances)])].sort();
